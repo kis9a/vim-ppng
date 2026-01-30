@@ -1,0 +1,191 @@
+scriptencoding utf-8
+
+" Test core functionality of vim-ppng
+call themis#helper('command').with(themis#helper('assert'))
+
+Describe vim_ppng#core#resolve_url
+
+  Before all
+    " Save original ppng_server value
+    let s:original_server = get(g:, 'ppng_server', v:null)
+  End
+
+  After all
+    " Restore original ppng_server value
+    if s:original_server isnot v:null
+      let g:ppng_server = s:original_server
+    elseif exists('g:ppng_server')
+      unlet g:ppng_server
+    endif
+  End
+
+  Before each
+    " Reset to default server before each test
+    if exists('g:ppng_server')
+      unlet g:ppng_server
+    endif
+  End
+
+  It should return full URL when input is already a full URL
+    let l:url = vim_ppng#core#resolve_url('http://example.com/path')
+    Assert Equals(l:url, 'http://example.com/path')
+
+    let l:url = vim_ppng#core#resolve_url('https://example.com/path')
+    Assert Equals(l:url, 'https://example.com/path')
+  End
+
+  It should combine default server with path
+    " Use default server (https://ppng.io)
+    let l:url = vim_ppng#core#resolve_url('mypath')
+    Assert Equals(l:url, 'https://ppng.io/mypath')
+
+    let l:url = vim_ppng#core#resolve_url('some/nested/path')
+    Assert Equals(l:url, 'https://ppng.io/some/nested/path')
+  End
+
+  It should use custom ppng_server if set
+    let g:ppng_server = 'http://localhost:8080'
+    let l:url = vim_ppng#core#resolve_url('mypath')
+    Assert Equals(l:url, 'http://localhost:8080/mypath')
+  End
+
+  It should strip trailing slashes from server
+    let g:ppng_server = 'http://example.com/'
+    let l:url = vim_ppng#core#resolve_url('path')
+    Assert Equals(l:url, 'http://example.com/path')
+
+    let g:ppng_server = 'http://example.com///'
+    let l:url = vim_ppng#core#resolve_url('path')
+    Assert Equals(l:url, 'http://example.com/path')
+  End
+
+  It should strip leading slashes from path
+    let l:url = vim_ppng#core#resolve_url('/mypath')
+    Assert Equals(l:url, 'https://ppng.io/mypath')
+
+    let l:url = vim_ppng#core#resolve_url('///mypath')
+    Assert Equals(l:url, 'https://ppng.io/mypath')
+  End
+
+  It should handle both server and path with slashes
+    let g:ppng_server = 'http://example.com//'
+    let l:url = vim_ppng#core#resolve_url('//path')
+    Assert Equals(l:url, 'http://example.com/path')
+  End
+
+  It should preserve URL parameters and fragments
+    let l:url = vim_ppng#core#resolve_url('https://example.com/path?query=1#fragment')
+    Assert Equals(l:url, 'https://example.com/path?query=1#fragment')
+  End
+
+End
+
+Describe vim_ppng#core#get_text
+
+  Before each
+    " Create a new buffer with test content
+    enew
+    call setline(1, ['line 1', 'line 2', 'line 3', 'line 4', 'line 5'])
+  End
+
+  After each
+    " Clean up buffer
+    bwipeout!
+  End
+
+  It should get all text in normal mode
+    let l:text = vim_ppng#core#get_text('normal', 0, 0)
+    Assert Equals(l:text, "line 1\nline 2\nline 3\nline 4\nline 5")
+  End
+
+  It should get selected lines in visual mode
+    let l:text = vim_ppng#core#get_text('visual', 2, 4)
+    Assert Equals(l:text, "line 2\nline 3\nline 4")
+  End
+
+  It should get single line in visual mode
+    let l:text = vim_ppng#core#get_text('visual', 3, 3)
+    Assert Equals(l:text, 'line 3')
+  End
+
+  It should get first line in visual mode
+    let l:text = vim_ppng#core#get_text('visual', 1, 1)
+    Assert Equals(l:text, 'line 1')
+  End
+
+  It should get last line in visual mode
+    let l:text = vim_ppng#core#get_text('visual', 5, 5)
+    Assert Equals(l:text, 'line 5')
+  End
+
+  It should get all lines in visual mode when range covers all
+    let l:text = vim_ppng#core#get_text('visual', 1, 5)
+    Assert Equals(l:text, "line 1\nline 2\nline 3\nline 4\nline 5")
+  End
+
+  It should return empty string for invalid mode
+    let l:text = vim_ppng#core#get_text('invalid', 1, 3)
+    Assert Equals(l:text, '')
+  End
+
+  It should handle empty buffer in normal mode
+    " Clear buffer
+    %delete _
+    let l:text = vim_ppng#core#get_text('normal', 0, 0)
+    Assert Equals(l:text, '')
+  End
+
+  It should handle buffer with one line
+    " Clear and set single line
+    %delete _
+    call setline(1, 'single line')
+    let l:text = vim_ppng#core#get_text('normal', 0, 0)
+    Assert Equals(l:text, 'single line')
+  End
+
+  It should preserve empty lines
+    " Set buffer with empty lines
+    call setline(1, ['line 1', '', 'line 3', '', 'line 5'])
+    let l:text = vim_ppng#core#get_text('normal', 0, 0)
+    Assert Equals(l:text, "line 1\n\nline 3\n\nline 5")
+  End
+
+  It should handle visual mode with empty lines
+    call setline(1, ['line 1', '', 'line 3'])
+    let l:text = vim_ppng#core#get_text('visual', 1, 3)
+    Assert Equals(l:text, "line 1\n\nline 3")
+  End
+
+End
+
+Describe vim_ppng#core#prompt_for_path
+
+  Before all
+    let s:original_input_mock = get(g:, 'Vim_ppng_input_mock', v:null)
+  End
+
+  After all
+    if s:original_input_mock isnot v:null
+      let g:Vim_ppng_input_mock = s:original_input_mock
+    elseif exists('g:Vim_ppng_input_mock')
+      unlet g:Vim_ppng_input_mock
+    endif
+  End
+
+  After each
+    if exists('g:Vim_ppng_input_mock')
+      unlet g:Vim_ppng_input_mock
+    endif
+  End
+
+  It should be callable without error
+    Assert True(exists('*vim_ppng#core#prompt_for_path'))
+  End
+
+  It should accept string parameter
+    let g:Vim_ppng_input_mock = 'test/path'
+    let l:result = vim_ppng#core#prompt_for_path('default')
+    Assert Equals(l:result, 'test/path')
+  End
+
+End

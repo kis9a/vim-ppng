@@ -1,0 +1,277 @@
+*vim-ppng.txt*  Share text instantly via Ppng Server
+
+Author:  @kis9a
+License: MIT License
+Repository: https://github.com/kis9a/vim-ppng
+
+==============================================================================
+CONTENTS                                                *vim-ppng-contents*
+
+1. Introduction ............................ |vim-ppng-introduction|
+2. Requirements ............................ |vim-ppng-requirements|
+3. Commands ................................ |vim-ppng-commands|
+4. Functions ............................... |vim-ppng-functions|
+5. Options ................................. |vim-ppng-options|
+6. Examples ................................ |vim-ppng-examples|
+7. About Ppng Server ..................... |vim-ppng-about|
+
+==============================================================================
+1. INTRODUCTION                                     *vim-ppng-introduction*
+
+vim-ppng is a Vim/Neovim plugin that enables instant text sharing between
+editors via Ppng Server (https://ppng.io). Send text from one editor and
+receive it in another using simple commands.
+
+Features:
+- Send buffer content or visual selection to Ppng Server
+- Receive text from Ppng Server into a new buffer
+- History management for quick access to recently used URLs
+- Works with both Vim 8.0+ and Neovim 0.5+
+- Customizable server URL, path, and timeout settings
+
+==============================================================================
+2. REQUIREMENTS                                     *vim-ppng-requirements*
+
+- Vim: 8.0 or later
+- Neovim: 0.5 or later
+- curl: Required for HTTP communication with Ppng Server
+
+==============================================================================
+3. COMMANDS                                            *vim-ppng-commands*
+
+                                                              *:PpngSend*
+:PpngSend [path]
+        Send the entire buffer content to Ppng Server.
+        If [path] is provided, it will be used as the URL path or full URL.
+        If [path] is omitted, you will be prompted for input.
+
+        The command supports visual selection:
+        - Select text in visual mode and run :PpngSend to send only the
+          selected text.
+
+        Examples: >
+            :PpngSend mytext
+            :PpngSend https://ppng.io/custom-path
+            :'<,'>PpngSend shared
+<
+                                                           *:PpngReceive*
+:PpngReceive [path]
+        Receive text from Ppng Server and display it in a new buffer.
+        If [path] is provided, it will be used as the URL path or full URL.
+        If [path] is omitted, you will be prompted for input.
+
+        The received text will be opened in a new buffer with these settings:
+        - buftype=nofile (not associated with any file)
+        - bufhidden=wipe (buffer is deleted when hidden)
+        - noswapfile (no swap file created)
+
+        Examples: >
+            :PpngReceive mytext
+            :PpngReceive https://ppng.io/custom-path
+<
+                                                           *:PpngHistory*
+:PpngHistory
+        Show a list of recently used URLs and interact with them.
+        You can select an entry from the history and choose to either
+        send to or receive from that URL.
+
+        History entries are stored with the most recent first, up to the
+        maximum specified by |g:ppng_history_max|.
+
+                                                      *:PpngClearHistory*
+:PpngClearHistory
+        Clear all entries from the history.
+
+==============================================================================
+4. FUNCTIONS                                          *vim-ppng-functions*
+
+These functions provide programmatic access to vim-ppng functionality.
+
+                                                          *vim_ppng#send()*
+vim_ppng#send({mode}, {path})
+        Send text to Ppng Server.
+
+        Parameters:~
+            {mode}  String - 'normal' (entire buffer) or 'visual' (selection)
+            {path}  String - URL path or full URL (empty string for prompt)
+
+        Returns:~
+            Dictionary with keys:
+            - ok:    Boolean - v:true on success, v:false on failure
+            - url:   String  - Full URL where text was sent
+            - error: String  - Error message (empty on success)
+
+        Examples: >
+            " Send entire buffer
+            let result = vim_ppng#send('normal', 'mytext')
+            if result.ok
+                echo 'Sent to: ' . result.url
+            endif
+
+            " Send visual selection
+            let result = vim_ppng#send('visual', '')
+<
+                                                       *vim_ppng#receive()*
+vim_ppng#receive({path})
+        Receive text from Ppng Server.
+
+        Parameters:~
+            {path}  String - URL path or full URL (empty string for prompt)
+
+        Returns:~
+            Dictionary with keys:
+            - ok:    Boolean - v:true on success, v:false on failure
+            - url:   String  - Full URL from which text was received
+            - error: String  - Error message (empty on success)
+
+        Example: >
+            let result = vim_ppng#receive('mytext')
+            if !result.ok
+                echo 'Error: ' . result.error
+            endif
+<
+                                                 *vim_ppng#clear_history()*
+vim_ppng#clear_history()
+        Clear all entries from the history.
+
+        This function has no parameters and no return value.
+
+        Example: >
+            call vim_ppng#clear_history()
+<
+==============================================================================
+5. OPTIONS                                              *vim-ppng-options*
+
+                                                           *g:ppng_server*
+g:ppng_server
+        The base URL of the Ppng Server to use.
+
+        Default: 'https://ppng.io'
+
+        Example: >
+            let g:ppng_server = 'https://ppng.io'
+<
+                                                             *g:ppng_path*
+g:ppng_path
+        The default path to use when no path is specified.
+        Use 'random5char' to let the server generate a random 5-character
+        path automatically.
+
+        Default: 'random5char'
+
+        Example: >
+            let g:ppng_path = 'mydefault'
+<
+                                                          *g:ppng_timeout*
+g:ppng_timeout
+        Timeout in seconds for curl operations.
+
+        Default: 30
+
+        Example: >
+            let g:ppng_timeout = 60
+<
+                                                      *g:ppng_history_max*
+g:ppng_history_max
+        Maximum number of history entries to store.
+        Set to 0 to disable history tracking.
+
+        Default: 10
+
+        Example: >
+            let g:ppng_history_max = 20
+<
+==============================================================================
+6. EXAMPLES                                            *vim-ppng-examples*
+
+Basic Usage~
+
+1. Send entire buffer to server:
+>
+    :PpngSend
+<
+   Enter a path when prompted, e.g., "mytext"
+
+2. Receive text from server:
+>
+    :PpngReceive mytext
+<
+
+Visual Selection~
+
+1. Select text in visual mode (v or V)
+2. Run:
+>
+    :'<,'>PpngSend shared
+<
+
+Using History~
+
+1. After sending or receiving, view history:
+>
+    :PpngHistory
+<
+2. Select an entry and choose send/receive action
+
+Configuration Example~
+
+In your .vimrc or init.vim:
+>
+    " Use custom Ppng Server
+    let g:ppng_server = 'https://ppng.io'
+
+    " Set default path
+    let g:ppng_path = 'vim-share'
+
+    " Increase timeout for slow connections
+    let g:ppng_timeout = 60
+
+    " Store more history entries
+    let g:ppng_history_max = 20
+
+    " Key mappings (optional)
+    nnoremap <Leader>ps :PpngSend<CR>
+    vnoremap <Leader>ps :PpngSend<CR>
+    nnoremap <Leader>pr :PpngReceive<CR>
+    nnoremap <Leader>ph :PpngHistory<CR>
+<
+
+Programmatic Usage~
+>
+    " Send current buffer and check result
+    function! MyCustomSend()
+        let result = vim_ppng#send('normal', 'mypath')
+        if result.ok
+            echo 'Successfully sent to: ' . result.url
+        else
+            echoerr 'Failed: ' . result.error
+        endif
+    endfunction
+<
+==============================================================================
+7. ABOUT PPNG SERVER                                    *vim-ppng-about*
+
+Ppng Server is a service that enables instant data transfer using HTTP.
+When you send data to a path, the server holds the connection open until
+someone requests data from the same path. This creates a simple, real-time
+pipe between two endpoints.
+
+Default Server: https://ppng.io
+
+How it works:
+1. Sender uploads data to https://ppng.io/path
+2. Server waits for a receiver
+3. Receiver downloads from https://ppng.io/path
+4. Data is transferred directly through the server
+
+Security Note:
+- Data is transferred in plain text
+- Anyone with the URL path can access the data
+- Use random paths for sensitive data
+- Consider running your own Ppng Server for private use
+
+You can run your own Ppng Server:
+https://github.com/nwtgck/ppng-server
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:

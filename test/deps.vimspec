@@ -1,0 +1,257 @@
+scriptencoding utf-8
+
+" Test vim_ppng#deps#command functions with stubs
+call themis#helper('command').with(themis#helper('assert'))
+
+Describe vim_ppng#deps#command#curl_upload
+
+  Before all
+    " Save original state
+    let s:original_curl_runner = get(g:, 'Vim_ppng_curl_runner', v:null)
+  End
+
+  After all
+    " Restore original state
+    if s:original_curl_runner isnot v:null
+      let g:Vim_ppng_curl_runner = s:original_curl_runner
+    elseif exists('g:Vim_ppng_curl_runner')
+      unlet g:Vim_ppng_curl_runner
+    endif
+  End
+
+  Before each
+    " Reset curl runner before each test
+    if exists('g:Vim_ppng_curl_runner')
+      unlet g:Vim_ppng_curl_runner
+    endif
+  End
+
+  It should return success with stub
+    " Setup stub that returns success
+    function! s:StubCurlSuccess(url, text, timeout, mode) abort
+      return {
+            \ 'ok': v:true,
+            \ 'code': 0,
+            \ 'stdout': ['Upload successful'],
+            \ 'stderr': []
+            \ }
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubCurlSuccess')
+
+    let l:result = vim_ppng#deps#command#curl_upload('http://example.com', 'test content', 30)
+
+    Assert True(l:result.ok)
+    Assert Equals(l:result.code, 0)
+    Assert Equals(l:result.stdout, ['Upload successful'])
+    Assert Equals(l:result.stderr, [])
+  End
+
+  It should return failure with stub
+    " Setup stub that returns failure
+    function! s:StubCurlFailure(url, text, timeout, mode) abort
+      return {
+            \ 'ok': v:false,
+            \ 'code': 28,
+            \ 'stdout': [],
+            \ 'stderr': ['Operation timed out']
+            \ }
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubCurlFailure')
+
+    let l:result = vim_ppng#deps#command#curl_upload('http://example.com', 'test content', 1)
+
+    Assert False(l:result.ok)
+    Assert Equals(l:result.code, 28)
+    Assert Equals(l:result.stdout, [])
+    Assert Equals(l:result.stderr, ['Operation timed out'])
+  End
+
+  It should pass correct parameters to stub
+    " Setup stub that verifies parameters
+    let g:test_stub_received = {}
+    function! s:StubCurlVerify(url, text, timeout, mode) abort
+      let g:test_stub_received = {
+            \ 'url': a:url,
+            \ 'text': a:text,
+            \ 'timeout': a:timeout,
+            \ 'mode': a:mode
+            \ }
+      return {'ok': v:true, 'code': 0, 'stdout': [], 'stderr': []}
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubCurlVerify')
+
+    call vim_ppng#deps#command#curl_upload('http://test.example.com/path', 'test data', 15)
+
+    Assert Equals(g:test_stub_received.url, 'http://test.example.com/path')
+    Assert Equals(g:test_stub_received.text, 'test data')
+    Assert Equals(g:test_stub_received.timeout, 15)
+    Assert Equals(g:test_stub_received.mode, 'upload')
+
+    " Cleanup
+    unlet g:test_stub_received
+  End
+
+  It should handle different timeout values
+    " Setup stub that checks timeout
+    let g:test_received_timeout = 0
+    function! s:StubCurlTimeout(url, text, timeout, mode) abort
+      let g:test_received_timeout = a:timeout
+      return {'ok': v:true, 'code': 0, 'stdout': [], 'stderr': []}
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubCurlTimeout')
+
+    " Test with timeout 60
+    call vim_ppng#deps#command#curl_upload('http://example.com', 'data', 60)
+    Assert Equals(g:test_received_timeout, 60)
+
+    " Test with timeout 5
+    call vim_ppng#deps#command#curl_upload('http://example.com', 'data', 5)
+    Assert Equals(g:test_received_timeout, 5)
+
+    " Cleanup
+    unlet g:test_received_timeout
+  End
+
+  It should handle curl not found case
+    " Mock executable() to return false
+    let g:Vim_ppng_executable_mock = 0
+
+    let l:result = vim_ppng#deps#command#curl_upload('http://example.com', 'test', 30)
+
+    Assert False(l:result.ok)
+    Assert Equals(l:result.code, -1)
+    Assert Equals(l:result.stdout, [])
+    Assert Equals(l:result.stderr, ['curl command is not available'])
+
+    " Cleanup
+    unlet g:Vim_ppng_executable_mock
+  End
+
+End
+
+Describe vim_ppng#deps#command#curl_download
+
+  Before all
+    " Save original state
+    let s:original_curl_runner = get(g:, 'Vim_ppng_curl_runner', v:null)
+  End
+
+  After all
+    " Restore original state
+    if s:original_curl_runner isnot v:null
+      let g:Vim_ppng_curl_runner = s:original_curl_runner
+    elseif exists('g:Vim_ppng_curl_runner')
+      unlet g:Vim_ppng_curl_runner
+    endif
+  End
+
+  Before each
+    " Reset curl runner before each test
+    if exists('g:Vim_ppng_curl_runner')
+      unlet g:Vim_ppng_curl_runner
+    endif
+  End
+
+  It should return success with stub
+    " Setup stub that returns success with content
+    function! s:StubDownloadSuccess(url, text, timeout, mode) abort
+      return {
+            \ 'ok': v:true,
+            \ 'code': 0,
+            \ 'stdout': ['line 1', 'line 2', 'line 3'],
+            \ 'stderr': []
+            \ }
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubDownloadSuccess')
+
+    let l:result = vim_ppng#deps#command#curl_download('http://example.com', 30)
+
+    Assert True(l:result.ok)
+    Assert Equals(l:result.code, 0)
+    Assert Equals(l:result.stdout, ['line 1', 'line 2', 'line 3'])
+    Assert Equals(l:result.stderr, [])
+  End
+
+  It should return failure with stub
+    " Setup stub that returns failure
+    function! s:StubDownloadFailure(url, text, timeout, mode) abort
+      return {
+            \ 'ok': v:false,
+            \ 'code': 6,
+            \ 'stdout': [],
+            \ 'stderr': ['Could not resolve host']
+            \ }
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubDownloadFailure')
+
+    let l:result = vim_ppng#deps#command#curl_download('http://invalid.example.com', 30)
+
+    Assert False(l:result.ok)
+    Assert Equals(l:result.code, 6)
+    Assert Equals(l:result.stdout, [])
+    Assert Equals(l:result.stderr, ['Could not resolve host'])
+  End
+
+  It should pass correct parameters to stub
+    " Setup stub that verifies parameters
+    let g:test_stub_received = {}
+    function! s:StubDownloadVerify(url, text, timeout, mode) abort
+      let g:test_stub_received = {
+            \ 'url': a:url,
+            \ 'text': a:text,
+            \ 'timeout': a:timeout,
+            \ 'mode': a:mode
+            \ }
+      return {'ok': v:true, 'code': 0, 'stdout': [], 'stderr': []}
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubDownloadVerify')
+
+    call vim_ppng#deps#command#curl_download('http://test.example.com/data', 20)
+
+    Assert Equals(g:test_stub_received.url, 'http://test.example.com/data')
+    Assert Equals(g:test_stub_received.text, '')
+    Assert Equals(g:test_stub_received.timeout, 20)
+    Assert Equals(g:test_stub_received.mode, 'download')
+
+    " Cleanup
+    unlet g:test_stub_received
+  End
+
+  It should handle network timeout
+    " Setup stub that simulates timeout
+    function! s:StubDownloadTimeout(url, text, timeout, mode) abort
+      return {
+            \ 'ok': v:false,
+            \ 'code': 28,
+            \ 'stdout': [],
+            \ 'stderr': ['Operation timed out after ' . a:timeout . ' seconds']
+            \ }
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubDownloadTimeout')
+
+    let l:result = vim_ppng#deps#command#curl_download('http://slow.example.com', 5)
+
+    Assert False(l:result.ok)
+    Assert Equals(l:result.code, 28)
+    Assert Match(join(l:result.stderr, ''), 'timed out')
+  End
+
+  It should handle empty response
+    " Setup stub that returns empty response
+    function! s:StubDownloadEmpty(url, text, timeout, mode) abort
+      return {
+            \ 'ok': v:true,
+            \ 'code': 0,
+            \ 'stdout': [],
+            \ 'stderr': []
+            \ }
+    endfunction
+    let g:Vim_ppng_curl_runner = function('s:StubDownloadEmpty')
+
+    let l:result = vim_ppng#deps#command#curl_download('http://empty.example.com', 30)
+
+    Assert True(l:result.ok)
+    Assert Equals(l:result.stdout, [])
+  End
+
+End

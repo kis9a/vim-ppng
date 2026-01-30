@@ -1,0 +1,249 @@
+scriptencoding utf-8
+
+" Test history functionality
+call themis#helper('command').with(themis#helper('assert'))
+
+Describe vim_ppng#internal#history
+
+  Before all
+    " Save original history max value
+    let s:original_max = get(g:, 'ppng_history_max', v:null)
+  End
+
+  After all
+    " Restore original history max value
+    if s:original_max isnot v:null
+      let g:ppng_history_max = s:original_max
+    elseif exists('g:ppng_history_max')
+      unlet g:ppng_history_max
+    endif
+  End
+
+  Before each
+    " Clear history and reset to default max before each test
+    call vim_ppng#internal#history#clear()
+    if exists('g:ppng_history_max')
+      unlet g:ppng_history_max
+    endif
+  End
+
+  After each
+    " Clean up after each test
+    call vim_ppng#internal#history#clear()
+  End
+
+  It should add URL to history
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 1)
+    Assert Equals(l:history[0], 'http://example.com/path1')
+  End
+
+  It should add multiple URLs to history
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    call vim_ppng#internal#history#add('http://example.com/path2')
+    call vim_ppng#internal#history#add('http://example.com/path3')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 3)
+    Assert Equals(l:history[0], 'http://example.com/path3')
+    Assert Equals(l:history[1], 'http://example.com/path2')
+    Assert Equals(l:history[2], 'http://example.com/path1')
+  End
+
+  It should keep latest URL first
+    call vim_ppng#internal#history#add('http://example.com/first')
+    call vim_ppng#internal#history#add('http://example.com/second')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(l:history[0], 'http://example.com/second')
+    Assert Equals(l:history[1], 'http://example.com/first')
+  End
+
+  It should move duplicate URL to front
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    call vim_ppng#internal#history#add('http://example.com/path2')
+    call vim_ppng#internal#history#add('http://example.com/path3')
+
+    " Add path1 again - it should move to front
+    call vim_ppng#internal#history#add('http://example.com/path1')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 3)
+    Assert Equals(l:history[0], 'http://example.com/path1')
+    Assert Equals(l:history[1], 'http://example.com/path3')
+    Assert Equals(l:history[2], 'http://example.com/path2')
+  End
+
+  It should not increase size when adding duplicate
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    call vim_ppng#internal#history#add('http://example.com/path2')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 2)
+
+    " Add duplicate
+    call vim_ppng#internal#history#add('http://example.com/path1')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 2)
+  End
+
+  It should respect default max limit of 10
+    " Add 12 URLs
+    for i in range(1, 12)
+      call vim_ppng#internal#history#add('http://example.com/path' . i)
+    endfor
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 10)
+
+    " Should keep latest 10
+    Assert Equals(l:history[0], 'http://example.com/path12')
+    Assert Equals(l:history[9], 'http://example.com/path3')
+  End
+
+  It should respect custom max limit
+    let g:ppng_history_max = 5
+
+    " Add 8 URLs
+    for i in range(1, 8)
+      call vim_ppng#internal#history#add('http://example.com/path' . i)
+    endfor
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 5)
+
+    " Should keep latest 5
+    Assert Equals(l:history[0], 'http://example.com/path8')
+    Assert Equals(l:history[4], 'http://example.com/path4')
+  End
+
+  It should allow max limit of 1
+    let g:ppng_history_max = 1
+
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    call vim_ppng#internal#history#add('http://example.com/path2')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 1)
+    Assert Equals(l:history[0], 'http://example.com/path2')
+  End
+
+  It should disable history when max is 0
+    let g:ppng_history_max = 0
+
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    call vim_ppng#internal#history#add('http://example.com/path2')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 0)
+  End
+
+  It should not store anything when max is 0
+    let g:ppng_history_max = 0
+
+    " Try to add URLs
+    call vim_ppng#internal#history#add('http://example.com/path1')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 0)
+
+    " Change max to positive and verify history is still empty
+    let g:ppng_history_max = 5
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 0)
+  End
+
+  It should return copy of history list
+    call vim_ppng#internal#history#add('http://example.com/path1')
+
+    let l:history1 = vim_ppng#internal#history#get()
+    let l:history2 = vim_ppng#internal#history#get()
+
+    " Modify one copy
+    call add(l:history1, 'http://example.com/modified')
+
+    " Other copy should be unchanged
+    Assert Equals(len(l:history2), 1)
+    Assert Equals(l:history2[0], 'http://example.com/path1')
+
+    " Original history should also be unchanged
+    let l:history3 = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history3), 1)
+  End
+
+  It should clear all history
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    call vim_ppng#internal#history#add('http://example.com/path2')
+    call vim_ppng#internal#history#add('http://example.com/path3')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 3)
+
+    call vim_ppng#internal#history#clear()
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 0)
+  End
+
+  It should allow adding after clear
+    call vim_ppng#internal#history#add('http://example.com/path1')
+    call vim_ppng#internal#history#clear()
+    call vim_ppng#internal#history#add('http://example.com/path2')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 1)
+    Assert Equals(l:history[0], 'http://example.com/path2')
+  End
+
+  It should handle empty history
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 0)
+    Assert Equals(type(l:history), v:t_list)
+  End
+
+  It should handle URLs with special characters
+    call vim_ppng#internal#history#add('http://example.com/path?query=1&param=2')
+    call vim_ppng#internal#history#add('http://example.com/path#fragment')
+    call vim_ppng#internal#history#add('http://example.com/path with spaces')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 3)
+    Assert Equals(l:history[0], 'http://example.com/path with spaces')
+    Assert Equals(l:history[1], 'http://example.com/path#fragment')
+    Assert Equals(l:history[2], 'http://example.com/path?query=1&param=2')
+  End
+
+  It should trim history when max is reduced
+    " Add 8 URLs with default max (10)
+    for i in range(1, 8)
+      call vim_ppng#internal#history#add('http://example.com/path' . i)
+    endfor
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 8)
+
+    " Reduce max to 3
+    let g:ppng_history_max = 3
+
+    " Add one more URL to trigger trim
+    call vim_ppng#internal#history#add('http://example.com/path9')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 3)
+    Assert Equals(l:history[0], 'http://example.com/path9')
+    Assert Equals(l:history[2], 'http://example.com/path7')
+  End
+
+  It should handle adding same URL multiple times consecutively
+    call vim_ppng#internal#history#add('http://example.com/same')
+    call vim_ppng#internal#history#add('http://example.com/same')
+    call vim_ppng#internal#history#add('http://example.com/same')
+
+    let l:history = vim_ppng#internal#history#get()
+    Assert Equals(len(l:history), 1)
+    Assert Equals(l:history[0], 'http://example.com/same')
+  End
+
+End
