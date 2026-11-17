@@ -9,6 +9,18 @@ function! vim_ppng#compat#has_nvim() abort
   return has('nvim')
 endfunction
 
+" has() that tests can override with g:Vim_ppng_has_mock
+" (e.g. {'nvim': 1} or {'cryptv': 0}).
+" @param feature string
+" @return number
+function! vim_ppng#compat#has(feature) abort
+  let l:mock = get(g:, 'Vim_ppng_has_mock', {})
+  if type(l:mock) == v:t_dict && has_key(l:mock, a:feature)
+    return l:mock[a:feature] ? 1 : 0
+  endif
+  return has(a:feature)
+endfunction
+
 " Notify message with level
 " @param msg string - Message to display
 " @param level string - Level: 'info' | 'warn' | 'error'

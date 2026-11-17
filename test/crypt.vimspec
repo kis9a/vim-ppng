@@ -1,0 +1,446 @@
+scriptencoding utf-8
+
+" Tests for encrypted send/receive (:PpngSend! / :PpngReceive!).
+" No network: curl is replaced by g:Vim_ppng_curl_runner, which keeps the
+" uploaded bytes in g:test_server.
+call themis#helper('command').with(themis#helper('assert'))
+
+let s:can_crypt = !has('nvim') && has('cryptv')
+function! PpngTestKey() abort
+  return 'correct horse ' . 'battery staple'
+endfunction
+
+" Fake curl: upload_file stores the bytes, download_file writes them back.
+function! PpngTestRunner(url, arg, timeout, mode) abort
+  call add(g:test_calls, {'url': a:url, 'mode': a:mode, 'arg': a:arg,
+        \ 'perm': getfperm(a:arg), 'readable': filereadable(a:arg)})
+  if a:mode ==# 'upload_file'
+    let g:test_server[a:url] = readfile(a:arg, 'b')
+    return {'ok': v:true, 'code': 0, 'stdout': [], 'stderr': []}
+  elseif a:mode ==# 'upload'
+    let g:test_server[a:url] = split(a:arg, "\n", 1)
+    return {'ok': v:true, 'code': 0, 'stdout': [], 'stderr': []}
+  elseif a:mode ==# 'download_file'
+    if !has_key(g:test_server, a:url)
+      return {'ok': v:false, 'code': 22, 'stdout': [], 'stderr': ['404']}
+    endif
+    call writefile(g:test_server[a:url], a:arg, 'b')
+    return {'ok': v:true, 'code': 0, 'stdout': [], 'stderr': []}
+  endif
+  return {'ok': v:false, 'code': 1, 'stdout': [], 'stderr': ['unexpected mode']}
+endfunction
+
+function! PpngTestFailRunner(url, arg, timeout, mode) abort
+  call add(g:test_calls, {'url': a:url, 'mode': a:mode, 'arg': a:arg,
+        \ 'perm': getfperm(a:arg), 'readable': filereadable(a:arg)})
+  return {'ok': v:false, 'code': 28, 'stdout': [], 'stderr': ['Operation timed out']}
+endfunction
+
+" Call a command function; errors are reported with :echoerr, which throws
+" inside the test runner, so return the exception text as well.
+function! PpngTestCall(fn, args) abort
+  try
+    let l:result = call(a:fn, a:args)
+    " Neovim reports through nvim_notify() and does not throw
+    return {'result': l:result, 'error': join(get(l:result, 'stderr', []), ' ')}
+  catch
+    return {'result': {}, 'error': v:exception}
+  endtry
+endfunction
+
+function! s:setup() abort
+  let g:test_server = {}
+  let g:test_calls = []
+  let g:Vim_ppng_curl_runner = function('PpngTestRunner')
+  let g:ppng_server = 'http://127.0.0.1:1'
+  let g:ppng_encrypt = 0
+  let g:ppng_cryptmethod = ''
+  call vim_ppng#internal#history#clear()
+endfunction
+
+function! s:teardown() abort
+  for l:name in ['Vim_ppng_curl_runner', 'Vim_ppng_secret_mock', 'Vim_ppng_input_mock',
+        \ 'Vim_ppng_has_mock', 'ppng_server', 'ppng_encrypt', 'ppng_cryptmethod',
+        \ 'test_server', 'test_calls']
+    if exists('g:' . l:name)
+      execute 'unlet g:' . l:name
+    endif
+  endfor
+  silent! only!
+  silent! %bwipeout!
+endfunction
+
+function! PpngTestSample() abort
+  return ['first line', '', 'マルチバイト 本文', "\ttab and trailing space ", '']
+endfunction
+
+Describe vim_ppng#internal#crypt pack/unpack
+
+  It should round-trip lines through the header
+    let l:packed = vim_ppng#internal#crypt#pack(PpngTestSample())
+    Assert Match(l:packed[0], '^vim-ppng-crypt:1:5:\x\{64}$')
+    let l:r = vim_ppng#internal#crypt#unpack(l:packed)
+    Assert True(l:r.ok)
+    Assert Equals(l:r.lines, PpngTestSample())
+  End
+
+  It should accept a trailing empty line after the counted body
+    let l:r = vim_ppng#internal#crypt#unpack(vim_ppng#internal#crypt#pack(['a']) + [''])
+    Assert True(l:r.ok)
+    Assert Equals(l:r.lines, ['a'])
+  End
+
+  It should reject garbage, a changed body, and extra text
+    Assert False(vim_ppng#internal#crypt#unpack([]).ok)
+    Assert False(vim_ppng#internal#crypt#unpack(['<$Nä>µ']).ok)
+    let l:packed = vim_ppng#internal#crypt#pack(['a', 'b'])
+    Assert False(vim_ppng#internal#crypt#unpack([l:packed[0], 'a', 'X']).ok)
+    Assert False(vim_ppng#internal#crypt#unpack([l:packed[0], 'a']).ok)
+    Assert False(vim_ppng#internal#crypt#unpack(l:packed + ['tail']).ok)
+    Assert Equals(vim_ppng#internal#crypt#unpack(['x']).error, 'Wrong key or corrupted data')
+  End
+
+End
+
+Describe vim_ppng#core#random_path
+
+  It should make 24 unambiguous characters by default
+    let l:p = vim_ppng#core#random_path()
+    Assert Match(l:p, '^[a-km-np-z2-9]\{24}$')
+  End
+
+  It should take a length and differ between calls
+    Assert Equals(len(vim_ppng#core#random_path(40)), 40)
+    Assert NotEquals(vim_ppng#core#random_path(), vim_ppng#core#random_path())
+  End
+
+End
+
+Describe vim_ppng#internal#crypt#check
+
+  After each
+    call s:teardown()
+  End
+
+  It should refuse Neovim
+    let g:Vim_ppng_has_mock = {'nvim': 1}
+    Assert Match(vim_ppng#internal#crypt#check('blowfish2'), 'Neovim')
+    Assert Match(vim_ppng#internal#crypt#check(''), 'Neovim')
+  End
+
+  It should refuse Vim without +cryptv
+    let g:Vim_ppng_has_mock = {'nvim': 0, 'cryptv': 0}
+    Assert Match(vim_ppng#internal#crypt#check('blowfish2'), '+cryptv')
+  End
+
+  It should refuse weak or unknown methods
+    let g:Vim_ppng_has_mock = {'nvim': 0, 'cryptv': 1, 'sodium': 1}
+    Assert Match(vim_ppng#internal#crypt#check('zip'), 'Unsupported cryptmethod "zip"')
+    Assert Match(vim_ppng#internal#crypt#check('blowfish'), 'Unsupported')
+    Assert Match(vim_ppng#internal#crypt#check('xchacha20'), 'Unsupported cryptmethod "xchacha20"')
+    Assert Equals(vim_ppng#internal#crypt#check('blowfish2'), '')
+    Assert Equals(vim_ppng#internal#crypt#check('xchacha20v2'), '')
+  End
+
+  It should need +sodium for xchacha20v2
+    let g:Vim_ppng_has_mock = {'nvim': 0, 'cryptv': 1, 'sodium': 0}
+    Assert Match(vim_ppng#internal#crypt#check('xchacha20v2'), '+sodium')
+  End
+
+  It should pick the method from +sodium unless g:ppng_cryptmethod is set
+    let g:Vim_ppng_has_mock = {'sodium': 1}
+    Assert Equals(vim_ppng#internal#crypt#method(), 'xchacha20v2')
+    let g:Vim_ppng_has_mock = {'sodium': 0}
+    Assert Equals(vim_ppng#internal#crypt#method(), 'blowfish2')
+    let g:ppng_cryptmethod = 'blowfish2'
+    let g:Vim_ppng_has_mock = {'sodium': 1}
+    Assert Equals(vim_ppng#internal#crypt#method(), 'blowfish2')
+  End
+
+End
+
+Describe encryption on an editor without :X
+
+  Before each
+    call s:setup()
+  End
+
+  After each
+    call s:teardown()
+  End
+
+  It should not prompt or send on Neovim (mocked)
+    let g:Vim_ppng_has_mock = {'nvim': 1}
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey()]
+    let g:Vim_ppng_input_mock = 'never-used'
+    let l:r = PpngTestCall('vim_ppng#command#send', ['enc-path', 1, 1, v:false, 1])
+    Assert Match(l:r.error, 'Neovim.*Nothing was sent')
+    Assert Equals(g:test_calls, [])
+    Assert Equals(len(g:Vim_ppng_secret_mock), 2)
+  End
+
+  It should not receive without +cryptv (mocked)
+    let g:Vim_ppng_has_mock = {'nvim': 0, 'cryptv': 0}
+    let g:Vim_ppng_secret_mock = [PpngTestKey()]
+    let l:r = PpngTestCall('vim_ppng#command#receive', ['enc-path', 1])
+    Assert Match(l:r.error, '+cryptv.*Nothing was received')
+    Assert Equals(g:test_calls, [])
+    Assert Equals(len(g:Vim_ppng_secret_mock), 1)
+  End
+
+  It should refuse :PpngSend! on a real Neovim
+    if !has('nvim')
+      Skip 'only on Neovim'
+    endif
+    let l:r = PpngTestCall('vim_ppng#command#send', ['enc-path', 1, 1, v:false, 1])
+    Assert Match(l:r.error, 'Neovim')
+    Assert Equals(g:test_calls, [])
+  End
+
+End
+
+Describe encrypted send and receive
+
+  Before each
+    if !s:can_crypt
+      Skip 'needs Vim with +cryptv'
+    endif
+    call s:setup()
+    enew!
+    call setline(1, PpngTestSample())
+  End
+
+  After each
+    call s:teardown()
+  End
+
+  It should round-trip with xchacha20v2
+    if !has('sodium')
+      Skip 'needs +sodium'
+    endif
+    let g:ppng_cryptmethod = 'xchacha20v2'
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey(), PpngTestKey()]
+    let l:r = vim_ppng#command#send('enc', 1, line('$'), v:false, 1)
+    Assert True(l:r.ok)
+    Assert Equals(l:r.url, 'http://127.0.0.1:1/enc')
+    let l:sent = g:test_server[l:r.url]
+    Assert Equals(strpart(l:sent[0], 0, 12), 'VimCrypt~05!')
+    Assert Equals(match(join(l:sent, "\n"), 'マルチバイト\|first line'), -1)
+
+    let l:wins = winnr('$')
+    let l:r = vim_ppng#command#receive('enc', 1)
+    Assert True(l:r.ok)
+    Assert Equals(winnr('$'), l:wins + 1)
+    Assert Equals(getline(1, '$'), PpngTestSample())
+    Assert Equals(&l:buftype, 'nofile')
+    Assert False(&l:swapfile)
+    Assert Equals(&l:key, '')
+  End
+
+  It should round-trip with blowfish2
+    let g:ppng_cryptmethod = 'blowfish2'
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey(), PpngTestKey()]
+    Assert True(vim_ppng#command#send('bf', 1, line('$'), v:false, 1).ok)
+    Assert Equals(strpart(g:test_server['http://127.0.0.1:1/bf'][0], 0, 12), 'VimCrypt~03!')
+    Assert True(vim_ppng#command#receive('bf', 1).ok)
+    Assert Equals(getline(1, '$'), PpngTestSample())
+  End
+
+  It should send only the visual range
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey(), PpngTestKey()]
+    Assert True(vim_ppng#command#send('range', 3, 4, v:true, 1).ok)
+    Assert True(vim_ppng#command#receive('range', 1).ok)
+    Assert Equals(getline(1, '$'), PpngTestSample()[2 : 3])
+  End
+
+  It should refuse a wrong key without opening a buffer (both methods)
+    for l:method in has('sodium') ? ['xchacha20v2', 'blowfish2'] : ['blowfish2']
+      let g:ppng_cryptmethod = l:method
+      let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey(), 'wrong key']
+      Assert True(vim_ppng#command#send('w', 1, line('$'), v:false, 1).ok)
+      let l:wins = winnr('$')
+      let l:bufs = len(getbufinfo())
+      let l:r = PpngTestCall('vim_ppng#command#receive', ['w', 1])
+      Assert Match(l:r.error, 'Wrong key or corrupted data', l:method)
+      Assert Equals(winnr('$'), l:wins)
+      Assert Equals(len(getbufinfo()), l:bufs)
+      Assert False(filereadable(g:test_calls[-1].arg))
+    endfor
+  End
+
+  It should refuse plain data when decrypting
+    let g:Vim_ppng_secret_mock = [PpngTestKey()]
+    let g:test_server['http://127.0.0.1:1/plain'] = ['hello']
+    let l:r = PpngTestCall('vim_ppng#command#receive', ['plain', 1])
+    Assert Match(l:r.error, 'not encrypted')
+    Assert Equals(winnr('$'), 1)
+  End
+
+  It should refuse the obsolete xchacha20 when decrypting
+    let g:Vim_ppng_secret_mock = [PpngTestKey()]
+    let g:test_server['http://127.0.0.1:1/v1'] = ['VimCrypt~04!' . repeat('x', 40)]
+    let l:r = PpngTestCall('vim_ppng#command#receive', ['v1', 1])
+    Assert Match(l:r.error, 'weak cryptmethod xchacha20')
+    Assert Equals(winnr('$'), 1)
+  End
+
+  It should write a 0600 temp file and delete it after sending
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey()]
+    Assert True(vim_ppng#command#send('perm', 1, line('$'), v:false, 1).ok)
+    Assert Equals(g:test_calls[0].mode, 'upload_file')
+    Assert Equals(g:test_calls[0].perm, 'rw-------')
+    Assert True(g:test_calls[0].readable)
+    Assert False(filereadable(g:test_calls[0].arg))
+  End
+
+  It should delete the temp file when curl fails
+    let g:Vim_ppng_curl_runner = function('PpngTestFailRunner')
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey()]
+    let l:r = PpngTestCall('vim_ppng#command#send', ['fail', 1, line('$'), v:false, 1])
+    Assert Match(l:r.error, 'Operation timed out')
+    Assert Equals(len(g:test_calls), 1)
+    Assert False(filereadable(g:test_calls[0].arg))
+
+    let g:Vim_ppng_secret_mock = [PpngTestKey()]
+    let l:r = PpngTestCall('vim_ppng#command#receive', ['fail', 1])
+    Assert Match(l:r.error, 'Operation timed out')
+    Assert Equals(g:test_calls[1].perm, 'rw-------')
+    Assert False(filereadable(g:test_calls[1].arg))
+  End
+
+  It should not send when the two keys differ
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), 'typo']
+    let l:r = PpngTestCall('vim_ppng#command#send', ['nomatch', 1, line('$'), v:false, 1])
+    Assert Match(l:r.error, 'Keys do not match')
+    Assert Equals(g:test_calls, [])
+  End
+
+  It should cancel on an empty key
+    let g:Vim_ppng_secret_mock = ['']
+    let l:r = vim_ppng#command#send('empty', 1, line('$'), v:false, 1)
+    Assert False(l:r.ok)
+    Assert Equals(l:r.stderr, ['Canceled by user'])
+    Assert Equals(g:test_calls, [])
+    let g:Vim_ppng_secret_mock = []
+    let l:r = vim_ppng#command#receive('empty', 1)
+    Assert Equals(l:r.stderr, ['Canceled by user'])
+    Assert Equals(g:test_calls, [])
+  End
+
+  It should leave no key, buffer, or window behind
+    let @" = 'unnamed before'
+    let l:bufs = map(getbufinfo(), 'v:val.bufnr')
+    let l:wins = winnr('$')
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey()]
+    Assert True(vim_ppng#command#send('clean', 1, line('$'), v:false, 1).ok)
+    Assert Equals(map(getbufinfo(), 'v:val.bufnr'), l:bufs)
+    Assert Equals(winnr('$'), l:wins)
+    Assert Equals(&l:key, '')
+    Assert Equals(&g:key, '')
+    Assert Equals(@", 'unnamed before')
+    for l:h in ['cmd', 'input', 'expr', 'search']
+      Assert Equals(stridx(histget(l:h, -1), PpngTestKey()), -1, l:h)
+    endfor
+    Assert Equals(stridx(execute('messages'), PpngTestKey()), -1)
+    Assert Equals(stridx(string(g:), PpngTestKey()), -1)
+    Assert Equals(stridx(execute('registers'), PpngTestKey()), -1)
+  End
+
+  It should skip user autocommands on the scratch buffer
+    augroup ppng_test
+      autocmd!
+      autocmd BufWritePre,BufNewFile,BufReadPost * call setline(1, 'HACKED')
+    augroup END
+    try
+      let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey(), PpngTestKey()]
+      Assert True(vim_ppng#command#send('au', 1, line('$'), v:false, 1).ok)
+      Assert True(vim_ppng#command#receive('au', 1).ok)
+      Assert Equals(getline(1, '$'), PpngTestSample())
+    finally
+      autocmd! ppng_test
+      augroup! ppng_test
+    endtry
+  End
+
+  It should encrypt by default when g:ppng_encrypt is set
+    let g:ppng_encrypt = 1
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey()]
+    Assert True(vim_ppng#command#send('def', 1, line('$'), v:false).ok)
+    Assert Equals(g:test_calls[0].mode, 'upload_file')
+    " explicit 0 still sends plain text
+    Assert True(vim_ppng#command#send('def', 1, line('$'), v:false, 0).ok)
+    Assert Equals(g:test_calls[1].mode, 'upload')
+  End
+
+  It should work through the public API
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey(), PpngTestKey()]
+    let l:r = vim_ppng#send('normal', 'api', {'encrypt': v:true})
+    Assert Equals(l:r, {'ok': v:true, 'url': 'http://127.0.0.1:1/api', 'error': ''})
+    Assert Equals(g:test_calls[0].mode, 'upload_file')
+    let l:r = vim_ppng#receive('api', {'encrypt': v:true})
+    Assert True(l:r.ok)
+    Assert Equals(getline(1, '$'), PpngTestSample())
+  End
+
+  It should run through :PpngSend! and :PpngReceive!
+    let g:Vim_ppng_secret_mock = [PpngTestKey(), PpngTestKey(), PpngTestKey()]
+    PpngSend! cmd
+    Assert Equals(g:test_calls[0].mode, 'upload_file')
+    PpngReceive! cmd
+    Assert Equals(g:test_calls[1].mode, 'download_file')
+    Assert Equals(getline(1, '$'), PpngTestSample())
+  End
+
+End
+
+Describe the {random} path token
+
+  Before each
+    call s:setup()
+    enew!
+    call setline(1, ['x'])
+  End
+
+  After each
+    call s:teardown()
+  End
+
+  It should replace {random} with a fresh path when sending
+    let l:r = vim_ppng#command#send('{random}', 1, 1, v:false, 0)
+    Assert True(l:r.ok)
+    Assert Match(g:test_calls[0].url, '^http://127\.0\.0\.1:1/[a-km-np-z2-9]\{24}$')
+    Assert Equals(l:r.url, g:test_calls[0].url)
+  End
+
+  It should keep g:ppng_path as {random} after a prompt
+    let l:saved = get(g:, 'ppng_path', 'random5char')
+    let g:ppng_path = '{random}'
+    let g:Vim_ppng_input_mock = 'typed-path'
+    Assert True(vim_ppng#command#send('', 1, 1, v:false, 0).ok)
+    Assert Equals(g:ppng_path, '{random}')
+    let g:ppng_path = l:saved
+    Assert Equals(g:test_calls[0].url, 'http://127.0.0.1:1/typed-path')
+  End
+
+  It should refuse to receive from {random}
+    let l:r = PpngTestCall('vim_ppng#command#receive', ['{random}', 0])
+    Assert Match(l:r.error, 'Cannot receive from {random}')
+    Assert Equals(g:test_calls, [])
+  End
+
+  It should keep plain sending unchanged
+    let l:r = vim_ppng#command#send('plain', 1, 1, v:false)
+    Assert True(l:r.ok)
+    Assert Equals(g:test_calls[0].mode, 'upload')
+    Assert Equals(g:test_calls[0].arg, 'x')
+  End
+
+End
+
+Describe vim_ppng#deps#command#curl_prefix
+
+  It should turn off curl URL globbing
+    Assert Equals(vim_ppng#deps#command#curl_prefix(30), 'curl -sS --globoff -m 30')
+  End
+
+End

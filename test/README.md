@@ -87,6 +87,30 @@ Tests history management functionality.
 - Verifies copy semantics to prevent unintended modifications
 - Tests disabled history mode (max=0)
 
+### 4. test/crypt.vimspec
+Tests encryption (`:PpngSend!` / `:PpngReceive!`) and random paths.
+
+**Tests:**
+- Header pack/unpack (`vim-ppng-crypt:1:<lines>:<sha256>`) and rejection of
+  garbage, changed or extra data
+- `vim_ppng#core#random_path()` length, alphabet, uniqueness
+- `vim_ppng#internal#crypt#check()` for Neovim, no `+cryptv`, weak methods,
+  no `+sodium` (via `g:Vim_ppng_has_mock`)
+- Round trip with `xchacha20v2` and `blowfish2`, visual range, public API,
+  `:PpngSend!` / `:PpngReceive!`, `g:ppng_encrypt`
+- Wrong key refused for both methods, plain data refused, no buffer left
+- Temp file is 0600 during curl and deleted after success and failure
+- Keys that differ, empty key
+- Key not left in history, messages, registers, `g:`, or 'key'
+- User autocommands do not touch the scratch buffer
+- `{random}` token
+
+**Key Features:**
+- `g:Vim_ppng_curl_runner` keeps the uploaded bytes in memory; no network
+- `g:Vim_ppng_secret_mock` (list) answers the key prompts
+- On Neovim the encryption round-trip tests are skipped and only the
+  "refuse" tests run
+
 ## Running Tests
 
 ### Run All Tests

@@ -7,8 +7,11 @@ set cpoptions&vim
 " Public API: Send text to ppng server
 " @param mode string - 'normal' or 'visual'
 " @param path string - Path/URL or empty string for prompt
+" @param ... dict - options: {'encrypt': v:true/v:false}
+"                   (omitted key = follow g:ppng_encrypt)
 " @return dict - {'ok': v:true/v:false, 'url': '...', 'error': ''}
-function! vim_ppng#send(mode, path) abort
+function! vim_ppng#send(mode, path, ...) abort
+  let l:encrypt = s:encrypt_flag(a:0 ? a:1 : {})
   let l:range_start = 1
   let l:range_end = line('$')
   let l:is_visual = v:false
@@ -23,13 +26,15 @@ function! vim_ppng#send(mode, path) abort
   endif
 
   " Call underlying command function
-  let l:result = vim_ppng#command#send(a:path, l:range_start, l:range_end, l:is_visual)
+  let l:result = vim_ppng#command#send(a:path, l:range_start, l:range_end, l:is_visual, l:encrypt)
 
   " Transform result to match public API spec
   let l:url = ''
   let l:error = ''
 
-  if l:result.ok
+  if l:result.ok && !empty(get(l:result, 'url', ''))
+    let l:url = l:result.url
+  elseif l:result.ok
     " Extract URL from the path argument or reconstruct it
     if !empty(a:path)
       let l:url = vim_ppng#core#resolve_url(a:path)
@@ -57,16 +62,20 @@ endfunction
 
 " Public API: Receive text from ppng server
 " @param path string - Path/URL or empty string for prompt
+" @param ... dict - options: {'encrypt': v:true/v:false}
+"                   (omitted key = follow g:ppng_encrypt)
 " @return dict - {'ok': v:true/v:false, 'url': '...', 'error': ''}
-function! vim_ppng#receive(path) abort
+function! vim_ppng#receive(path, ...) abort
   " Call underlying command function
-  let l:result = vim_ppng#command#receive(a:path)
+  let l:result = vim_ppng#command#receive(a:path, s:encrypt_flag(a:0 ? a:1 : {}))
 
   " Transform result to match public API spec
   let l:url = ''
   let l:error = ''
 
-  if l:result.ok
+  if l:result.ok && !empty(get(l:result, 'url', ''))
+    let l:url = l:result.url
+  elseif l:result.ok
     " Extract URL from the path argument or reconstruct it
     if !empty(a:path)
       let l:url = vim_ppng#core#resolve_url(a:path)
@@ -90,6 +99,15 @@ function! vim_ppng#receive(path) abort
         \ 'url': l:url,
         \ 'error': l:error
         \ }
+endfunction
+
+" @param opts dict
+" @return number - 1 / 0, or -1 to follow g:ppng_encrypt
+function! s:encrypt_flag(opts) abort
+  if type(a:opts) != v:t_dict || !has_key(a:opts, 'encrypt')
+    return -1
+  endif
+  return a:opts.encrypt ? 1 : 0
 endfunction
 
 " Public API: Clear history

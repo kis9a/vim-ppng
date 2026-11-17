@@ -11,6 +11,8 @@ vim-ppng enables real-time text sharing between editors using Ppng Server. Send 
 - Vim: 8.0 or later
 - Neovim: 0.5 or later
 - curl: Required for HTTP communication
+- Encryption (`:PpngSend!` / `:PpngReceive!`): Vim with `+cryptv`
+  (`+sodium` for the default `xchacha20v2`). Not available in Neovim.
 
 ## Installation
 
@@ -59,7 +61,9 @@ cp -r vim-ppng/* ~/.config/nvim/
 ### Commands
 
 - `:PpngSend [path]` - Send buffer content or visual selection to Ppng Server
+- `:PpngSend! [path]` - Encrypt with a key, then send (Vim only)
 - `:PpngReceive [path]` - Receive text from Ppng Server into a new buffer
+- `:PpngReceive! [path]` - Receive and decrypt with a key (Vim only)
 - `:PpngHistory` - Show and interact with recently used URLs
 - `:PpngClearHistory` - Clear history
 
@@ -67,8 +71,8 @@ cp -r vim-ppng/* ~/.config/nvim/
 
 Public API for programmatic access:
 
-- `vim_ppng#send(mode, path)` - Send text (mode: 'normal' or 'visual')
-- `vim_ppng#receive(path)` - Receive text from server
+- `vim_ppng#send(mode, path [, {'encrypt': v:true}])` - Send text (mode: 'normal' or 'visual')
+- `vim_ppng#receive(path [, {'encrypt': v:true}])` - Receive text from server
 - `vim_ppng#clear_history()` - Clear history
 
 ### Options
@@ -77,6 +81,10 @@ Public API for programmatic access:
 - `g:ppng_path` - Default path (default: `'random5char'`)
 - `g:ppng_timeout` - Timeout in seconds (default: `30`)
 - `g:ppng_history_max` - Maximum history entries (default: `10`)
+- `g:ppng_encrypt` - Encrypt/decrypt even without `!` (default: `0`)
+- `g:ppng_cryptmethod` - Method for encrypted sending: `'xchacha20v2'`
+  or `'blowfish2'` (default: `''` = `xchacha20v2` with
+  `+sodium`, otherwise `blowfish2`)
 
 ## Configuration
 
@@ -165,6 +173,68 @@ let g:ppng_path = 'random5char'
 " Server will generate a random 5-character path
 ```
 
+### Hard-to-guess Paths
+
+Anyone who knows the path can receive the data. Use the `{random}` token to
+get a fresh 24-character random path (about 120 bits, read from
+`/dev/urandom`):
+
+```vim
+:PpngSend {random}
+" Shows 'Waiting for receiver at https://ppng.io/<random path>' before sending
+
+let g:ppng_path = '{random}'
+:PpngSend
+" The prompt is pre-filled with a new random path each time
+```
+
+Tell the receiver the path through another channel. `:PpngReceive` does not
+accept `{random}`.
+
+### Encryption
+
+`:PpngSend!` encrypts the text with Vim's own file encryption (`:X`,
+`'cryptmethod'`) before sending, and `:PpngReceive!` decrypts it. Both sides
+use the same key, which is asked with `inputsecret()` (twice when sending).
+
+```vim
+" Editor A
+:PpngSend! {random}
+" Ppng key: ********   Ppng key (again): ********
+
+" Editor B
+:PpngReceive! <path shown in editor A>
+" Ppng key: ********
+```
+
+To encrypt by default:
+
+```vim
+let g:ppng_encrypt = 1              " :PpngSend / :PpngReceive encrypt too
+let g:ppng_cryptmethod = 'blowfish2' " if the receiver's Vim has no +sodium
+```
+
+How it works:
+
+- The text, with one header line (`vim-ppng-crypt:1:<lines>:<sha256>`), is
+  written to a `tempname()` file with `'key'` and `'cryptmethod'` set, and
+  that file is sent with `curl --data-binary`. The receiver downloads to a
+  temp file and reads it back with the key.
+- Temp files are created with mode 0600 and always deleted, also on errors.
+  The scratch buffers have no swap file and no undo, and skip autocommands.
+- The key is not stored in command/input history, viminfo, variables,
+  registers or messages, and `'key'` is cleared after use.
+- A wrong key is refused with "Wrong key or corrupted data" and nothing is
+  shown. `xchacha20v2` detects it by itself; for `blowfish2`, which would
+  silently decrypt to garbage, the sha256 in the header detects it.
+- Data without a `VimCrypt` header, or with the weak `zip`/`blowfish`
+  methods, is refused by `:PpngReceive!`.
+- In Neovim, or in Vim without `+cryptv`, `:PpngSend!` / `:PpngReceive!` show
+  an error and send/receive nothing.
+
+The data is also readable with plain Vim: save it to a file and open it in
+Vim, which asks for the key; the first line is the vim-ppng header.
+
 ### Programmatic Usage
 
 Use the public API in your Vimscript code:
@@ -183,6 +253,9 @@ let result = vim_ppng#receive('mypath')
 if result.ok
     echo 'Received from: ' . result.url
 endif
+
+" Encrypted (asks for the key)
+let result = vim_ppng#send('normal', '{random}', {'encrypt': v:true})
 ```
 
 ## About Ppng Server
@@ -192,9 +265,10 @@ endif
 **Default server:** https://ppng.io
 
 **Security Note:**
-- Data is transferred in plain text
+- Without `!` (and `g:ppng_encrypt`), data is transferred in plain text;
+  use `:PpngSend!` / `:PpngReceive!` to encrypt it
 - Anyone with the URL can access the data
-- Use random/unique paths for sensitive content
+- Use random/unique paths (`{random}`) for sensitive content
 - Consider running your own Ppng Server for private use
 
 **Self-hosting:**
@@ -254,6 +328,7 @@ autoload/vim_ppng/
   ├── deps/
   │   └── command.vim          # External command (curl) wrapper
   └── internal/
+      ├── crypt.vim            # Encryption with Vim's :X ('key', 'cryptmethod')
       └── history.vim          # History management
 ```
 

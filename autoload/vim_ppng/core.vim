@@ -68,6 +68,73 @@ function! vim_ppng#core#prompt_for_path(default_value) abort
   endtry
 endfunction
 
+" Path token that is replaced with a fresh random path
+let s:RANDOM_TOKEN = '{random}'
+
+" 32 characters without look-alikes (no l, o, 0, 1); 256 % 32 == 0 keeps
+" every character equally likely.
+let s:ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'
+
+" @param path string
+" @return bool - whether path is the random token
+function! vim_ppng#core#is_random_token(path) abort
+  return a:path ==# s:RANDOM_TOKEN
+endfunction
+
+" Generate a hard-to-guess path.
+" @param ... number - length (default 24, about 120 bits)
+" @return string
+function! vim_ppng#core#random_path(...) abort
+  let l:len = a:0 ? a:1 : 24
+  let l:path = ''
+  for l:byte in s:random_bytes(l:len)
+    let l:path .= s:ALPHABET[l:byte % 32]
+  endfor
+  return l:path
+endfunction
+
+" Read random bytes from /dev/urandom, falling back to sha256 of
+" time/pid/tempname when that is not readable (e.g. Windows).
+" @param n number
+" @return list - numbers 0..255
+function! s:random_bytes(n) abort
+  if exists('*readblob') && filereadable('/dev/urandom')
+    try
+      let l:blob = readblob('/dev/urandom', 0, a:n)
+      if len(l:blob) == a:n
+        return map(range(a:n), 'l:blob[v:val]')
+      endif
+    catch
+    endtry
+  endif
+  let l:bytes = []
+  let l:seed = reltimestr(reltime()) . getpid() . tempname() . localtime()
+  while len(l:bytes) < a:n
+    let l:seed = sha256(l:seed . reltimestr(reltime()) . len(l:bytes))
+    for l:i in range(0, 62, 2)
+      call add(l:bytes, str2nr(l:seed[l:i : l:i + 1], 16))
+    endfor
+  endwhile
+  return l:bytes[: a:n - 1]
+endfunction
+
+" Ask for a secret without echo and without touching any history.
+" Tests can set g:Vim_ppng_secret_mock to a list of answers.
+" @param prompt string
+" @return string - '' when canceled
+function! vim_ppng#core#prompt_secret(prompt) abort
+  if exists('g:Vim_ppng_secret_mock')
+    return empty(g:Vim_ppng_secret_mock) ? '' : remove(g:Vim_ppng_secret_mock, 0)
+  endif
+  try
+    let l:secret = inputsecret(a:prompt)
+  catch
+    let l:secret = ''
+  endtry
+  redraw
+  return l:secret
+endfunction
+
 " Restore cpoptions
 let &cpoptions = s:save_cpo
 unlet s:save_cpo

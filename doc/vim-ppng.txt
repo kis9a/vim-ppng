@@ -14,6 +14,7 @@ CONTENTS                                                *vim-ppng-contents*
 5. Options ................................. |vim-ppng-options|
 6. Examples ................................ |vim-ppng-examples|
 7. About Ppng Server ..................... |vim-ppng-about|
+8. Encryption .............................. |vim-ppng-encryption|
 
 ==============================================================================
 1. INTRODUCTION                                     *vim-ppng-introduction*
@@ -26,6 +27,8 @@ Features:
 - Send buffer content or visual selection to Ppng Server
 - Receive text from Ppng Server into a new buffer
 - History management for quick access to recently used URLs
+- Optional encryption with Vim's own |:X| (|vim-ppng-encryption|)
+- Hard-to-guess random paths with the {random} token
 - Works with both Vim 8.0+ and Neovim 0.5+
 - Customizable server URL, path, and timeout settings
 
@@ -35,6 +38,9 @@ Features:
 - Vim: 8.0 or later
 - Neovim: 0.5 or later
 - curl: Required for HTTP communication with Ppng Server
+- Encryption (|:PpngSend!|, |:PpngReceive!|): Vim with |+cryptv|, and
+  |+sodium| for the default 'xchacha20v2'. Neovim has no |:X|, so it cannot
+  encrypt.
 
 ==============================================================================
 3. COMMANDS                                            *vim-ppng-commands*
@@ -49,11 +55,22 @@ Features:
         - Select text in visual mode and run :PpngSend to send only the
           selected text.
 
+        If [path] is {random}, a new random path is used (see
+        |vim-ppng-random|).
+
         Examples: >
             :PpngSend mytext
             :PpngSend https://ppng.io/custom-path
             :'<,'>PpngSend shared
+            :PpngSend {random}
 <
+                                                             *:PpngSend!*
+:[range]PpngSend! [path]
+        Like |:PpngSend|, but the text is encrypted before it is sent.
+        The key is asked twice with |inputsecret()|. If the keys differ or
+        the key is empty, nothing is sent. See |vim-ppng-encryption|.
+        In Neovim, or in Vim without |+cryptv|, an error is shown and
+        nothing is sent.
                                                            *:PpngReceive*
 :PpngReceive [path]
         Receive text from Ppng Server and display it in a new buffer.
@@ -69,11 +86,17 @@ Features:
             :PpngReceive mytext
             :PpngReceive https://ppng.io/custom-path
 <
+                                                          *:PpngReceive!*
+:PpngReceive! [path]
+        Like |:PpngReceive|, but the received data is decrypted with a key
+        asked with |inputsecret()| (before waiting for the sender).
+        A wrong key, unencrypted data, or data encrypted with a weak method
+        ('zip', 'blowfish') is refused and nothing is shown.
                                                            *:PpngHistory*
 :PpngHistory
         Show a list of recently used URLs and interact with them.
-        You can select an entry from the history and choose to either
-        send to or receive from that URL.
+        You can select an entry from the history and choose to send to or
+        receive from that URL, plain or encrypted.
 
         History entries are stored with the most recent first, up to the
         maximum specified by |g:ppng_history_max|.
@@ -88,12 +111,15 @@ Features:
 These functions provide programmatic access to vim-ppng functionality.
 
                                                           *vim_ppng#send()*
-vim_ppng#send({mode}, {path})
+vim_ppng#send({mode}, {path} [, {opts}])
         Send text to Ppng Server.
 
         Parameters:~
             {mode}  String - 'normal' (entire buffer) or 'visual' (selection)
             {path}  String - URL path or full URL (empty string for prompt)
+            {opts}  Dict   - optional. 'encrypt': v:true to encrypt,
+                             v:false to send plain text. Without the key,
+                             |g:ppng_encrypt| decides.
 
         Returns:~
             Dictionary with keys:
@@ -112,11 +138,12 @@ vim_ppng#send({mode}, {path})
             let result = vim_ppng#send('visual', '')
 <
                                                        *vim_ppng#receive()*
-vim_ppng#receive({path})
+vim_ppng#receive({path} [, {opts}])
         Receive text from Ppng Server.
 
         Parameters:~
             {path}  String - URL path or full URL (empty string for prompt)
+            {opts}  Dict   - optional. 'encrypt': v:true to decrypt.
 
         Returns:~
             Dictionary with keys:
@@ -159,8 +186,12 @@ g:ppng_path
 
         Default: 'random5char'
 
+        Set it to '{random}' to get a new random path in the prompt each
+        time you send (see |vim-ppng-random|).
+
         Example: >
             let g:ppng_path = 'mydefault'
+            let g:ppng_path = '{random}'
 <
                                                           *g:ppng_timeout*
 g:ppng_timeout
@@ -181,6 +212,22 @@ g:ppng_history_max
         Example: >
             let g:ppng_history_max = 20
 <
+                                                          *g:ppng_encrypt*
+g:ppng_encrypt
+        When non-zero, |:PpngSend| and |:PpngReceive| encrypt and decrypt
+        as if "!" was given.
+
+        Default: 0
+
+                                                      *g:ppng_cryptmethod*
+g:ppng_cryptmethod
+        The 'cryptmethod' used by |:PpngSend!|: 'xchacha20v2' or
+        'blowfish2'. The obsolete 'xchacha20' is not used. The receiver detects the method from the data.
+        Empty means 'xchacha20v2' when Vim has |+sodium|, else 'blowfish2'.
+        Use 'blowfish2' when the receiver's Vim has no |+sodium|.
+
+        Default: ''
+
 ==============================================================================
 6. EXAMPLES                                            *vim-ppng-examples*
 
@@ -265,13 +312,58 @@ How it works:
 4. Data is transferred directly through the server
 
 Security Note:
-- Data is transferred in plain text
+- Without "!" data is transferred in plain text; use |:PpngSend!|
 - Anyone with the URL path can access the data
-- Use random paths for sensitive data
+- Use random paths for sensitive data (|vim-ppng-random|)
 - Consider running your own Ppng Server for private use
 
 You can run your own Ppng Server:
 https://github.com/nwtgck/ppng-server
+
+==============================================================================
+8. ENCRYPTION                                        *vim-ppng-encryption*
+
+|:PpngSend!| and |:PpngReceive!| use Vim's own file encryption (|:X|,
+'cryptmethod', 'key').
+
+Sending:~
+1. The key is asked twice with |inputsecret()|.
+2. The text gets one header line: >
+       vim-ppng-crypt:1:{number of lines}:{sha256 of the text}
+<3. It is written to a |tempname()| file (mode 0600) from a scratch buffer
+   with 'key' and 'cryptmethod' set. The scratch buffer has no swap file,
+   no undo, and no autocommands run.
+4. The file is sent with "curl --data-binary" and then deleted.
+
+Receiving:~
+1. The key is asked once.
+2. The data is downloaded with "curl -o" into a 0600 temp file.
+3. The file must start with a VimCrypt header of 'blowfish2' or
+   'xchacha20v2'; otherwise nothing is shown (zip, blowfish and the
+   obsolete xchacha20 are refused).
+4. It is read with the key, the header is checked, and the text is opened
+   in a new scratch buffer. The temp file is deleted.
+
+Wrong key:~
+'xchacha20v2' refuses a wrong key by itself (E1200). 'blowfish2' would
+silently give garbage; the sha256 in the header catches that. Either way the
+error is "Wrong key or corrupted data" and nothing is shown.
+
+The key:~
+The key is not added to any history, viminfo, variable, register or
+message. 'key' is cleared before the scratch buffers are wiped. Temp files
+are deleted even when encryption or curl fails.
+
+Not supported:~
+Neovim has no |:X|. In Neovim, and in Vim without |+cryptv|, the commands
+show an error and send or receive nothing. 'xchacha20v2' needs |+sodium|.
+
+                                                         *vim-ppng-random*
+Random paths:~
+The token {random} as [path] of |:PpngSend| (or as |g:ppng_path| for the
+prompt) is replaced with 24 characters from /dev/urandom (about 120 bits),
+using "abcdefghijkmnpqrstuvwxyz23456789". The URL is shown before curl
+waits for the receiver; pass the path to the receiver separately.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

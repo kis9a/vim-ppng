@@ -26,10 +26,9 @@ function! vim_ppng#deps#command#curl_upload(url, text, timeout) abort
     return call(g:Vim_ppng_curl_runner, [a:url, a:text, a:timeout, 'upload'])
   endif
 
-  " Prepare curl command: curl -sS -T - -m <timeout> <url>
-  let l:escaped_url = shellescape(a:url)
-  let l:timeout_str = string(a:timeout)
-  let l:cmd = 'curl -sS -T - -m ' . l:timeout_str . ' ' . l:escaped_url
+  " Prepare curl command: curl -sS --globoff -m <timeout> -T - <url>
+  let l:cmd = vim_ppng#deps#command#curl_prefix(a:timeout)
+        \ . ' -T - ' . shellescape(a:url)
 
   " Execute command with text as stdin
   let l:output = systemlist(l:cmd, a:text)
@@ -75,10 +74,9 @@ function! vim_ppng#deps#command#curl_download(url, timeout) abort
     return call(g:Vim_ppng_curl_runner, [a:url, '', a:timeout, 'download'])
   endif
 
-  " Prepare curl command: curl -sS -m <timeout> <url>
-  let l:escaped_url = shellescape(a:url)
-  let l:timeout_str = string(a:timeout)
-  let l:cmd = 'curl -sS -m ' . l:timeout_str . ' ' . l:escaped_url
+  " Prepare curl command: curl -sS --globoff -m <timeout> <url>
+  let l:cmd = vim_ppng#deps#command#curl_prefix(a:timeout)
+        \ . ' ' . shellescape(a:url)
 
   " Execute command
   let l:output = systemlist(l:cmd)
@@ -100,6 +98,80 @@ function! vim_ppng#deps#command#curl_download(url, timeout) abort
         \ 'code': l:exit_code,
         \ 'stdout': l:stdout,
         \ 'stderr': l:stderr
+        \ }
+endfunction
+
+" Upload the bytes of a file using curl --data-binary (used for encrypted data)
+" @param url string - Target URL
+" @param file string - File to upload
+" @param timeout number - Timeout in seconds
+" @return dict - {'ok': v:true/v:false, 'code': N, 'stdout': [...], 'stderr': [...]}
+function! vim_ppng#deps#command#curl_upload_file(url, file, timeout) abort
+  let l:has_curl = exists('g:Vim_ppng_executable_mock') ? g:Vim_ppng_executable_mock : executable('curl')
+  if !l:has_curl
+    return s:no_curl()
+  endif
+
+  " Use stub runner if provided (for testing); the 2nd argument is the file
+  if exists('g:Vim_ppng_curl_runner')
+    return call(g:Vim_ppng_curl_runner, [a:url, a:file, a:timeout, 'upload_file'])
+  endif
+
+  let l:cmd = vim_ppng#deps#command#curl_prefix(a:timeout)
+        \ . ' -f -H ' . shellescape('Content-Type: application/octet-stream')
+        \ . ' --data-binary ' . shellescape('@' . a:file)
+        \ . ' ' . shellescape(a:url)
+  return s:run(l:cmd)
+endfunction
+
+" Download into a file using curl -o (used for encrypted data)
+" @param url string - Source URL
+" @param file string - Existing file to overwrite (keeps its mode)
+" @param timeout number - Timeout in seconds
+" @return dict - {'ok': v:true/v:false, 'code': N, 'stdout': [...], 'stderr': [...]}
+function! vim_ppng#deps#command#curl_download_file(url, file, timeout) abort
+  let l:has_curl = exists('g:Vim_ppng_executable_mock') ? g:Vim_ppng_executable_mock : executable('curl')
+  if !l:has_curl
+    return s:no_curl()
+  endif
+
+  " Use stub runner if provided (for testing); it must write the file
+  if exists('g:Vim_ppng_curl_runner')
+    return call(g:Vim_ppng_curl_runner, [a:url, a:file, a:timeout, 'download_file'])
+  endif
+
+  let l:cmd = vim_ppng#deps#command#curl_prefix(a:timeout)
+        \ . ' -f -o ' . shellescape(a:file)
+        \ . ' ' . shellescape(a:url)
+  return s:run(l:cmd)
+endfunction
+
+" Common start of every curl command.
+" --globoff: '[', ']', '{' and '}' in a path are sent as they are instead of
+" being expanded by curl into several requests.
+" @param timeout number - Timeout in seconds
+" @return string
+function! vim_ppng#deps#command#curl_prefix(timeout) abort
+  return 'curl -sS --globoff -m ' . string(a:timeout)
+endfunction
+
+function! s:no_curl() abort
+  return {
+        \ 'ok': v:false,
+        \ 'code': -1,
+        \ 'stdout': [],
+        \ 'stderr': ['curl command is not available']
+        \ }
+endfunction
+
+function! s:run(cmd) abort
+  let l:output = systemlist(a:cmd)
+  let l:exit_code = v:shell_error
+  return {
+        \ 'ok': l:exit_code == 0,
+        \ 'code': l:exit_code,
+        \ 'stdout': l:exit_code == 0 ? l:output : [],
+        \ 'stderr': l:exit_code == 0 ? [] : l:output
         \ }
 endfunction
 
